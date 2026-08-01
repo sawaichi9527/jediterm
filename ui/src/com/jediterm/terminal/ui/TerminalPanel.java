@@ -61,6 +61,12 @@ public class TerminalPanel extends JComponent implements TerminalDisplay, Termin
 
   public static final double SCROLL_SPEED = 0.05;
 
+  private enum SelectionScope {
+    ACTIVE,
+    ALL_MAIN,
+    SEARCH_MAIN
+  }
+
   /*font related*/
   private Font myNormalFont;
   private Font myItalicFont;
@@ -78,6 +84,7 @@ public class TerminalPanel extends JComponent implements TerminalDisplay, Termin
   private MouseMode myMouseMode = MouseMode.MOUSE_REPORTING_NONE;
   private Point mySelectionStartPoint = null;
   private TerminalSelection mySelection = null;
+  private SelectionScope mySelectionScope = SelectionScope.ACTIVE;
 
   private final TerminalCopyPasteHandler myCopyPasteHandler;
 
@@ -103,6 +110,10 @@ public class TerminalPanel extends JComponent implements TerminalDisplay, Termin
   private String myWindowTitle = "Terminal";
 
   private TerminalActionProvider myNextActionProvider;
+  private TerminalActionProvider myPopupMenuActionProvider;
+  private Runnable myRetainedMainCopyHandler;
+  private TerminalSearchResult myCoordinateFindResult;
+  private int myCoordinateFindIndex = -1;
   private String myInputMethodUncommittedChars;
 
   private Timer myRepaintTimer;
@@ -305,7 +316,9 @@ public class TerminalPanel extends JComponent implements TerminalDisplay, Termin
           handlePasteSelection();
         } else if (e.getButton() == MouseEvent.BUTTON3) {
           HyperlinkStyle contextHyperlink = findHyperlink(e.getPoint());
-          TerminalActionProvider provider = getTerminalActionProvider(contextHyperlink != null ? contextHyperlink.getLinkInfo() : null, e);
+          TerminalActionProvider provider = myPopupMenuActionProvider != null
+            ? myPopupMenuActionProvider
+            : getTerminalActionProvider(contextHyperlink != null ? contextHyperlink.getLinkInfo() : null, e);
           JPopupMenu popup = createPopupMenu(provider);
           popup.show(e.getComponent(), e.getX(), e.getY());
         }
@@ -814,7 +827,22 @@ public class TerminalPanel extends JComponent implements TerminalDisplay, Termin
             }
           }
 
-          if (mySelection != null) {
+          if (myCoordinateFindResult != null
+              && !myTerminalTextBuffer.isUsingAlternateBuffer()
+              && myCoordinateFindResult.getRevision() == myTerminalTextBuffer.getMainBufferRevision()) {
+            int terminalRow = row + myClientScrollOrigin;
+            TextStyle foundPatternStyle = getFoundPattern(style);
+            for (TerminalSearchResult.Span span : myCoordinateFindResult.getSpans(terminalRow)) {
+              int start = Math.max(x, span.getStartCell());
+              int end = Math.min(x + characters.length(), span.getEndCell());
+              if (start < end) {
+                drawCharacters(start, row, foundPatternStyle,
+                  characters.subBuffer(start - x, end - start), gfx);
+              }
+            }
+          }
+
+          if (mySelection != null && !(mySelectionScope != SelectionScope.ACTIVE && myTerminalTextBuffer.isUsingAlternateBuffer())) {
             Pair<Integer, Integer> interval = mySelection.intersect(x, row + myClientScrollOrigin, characters.length());
             if (interval != null) {
               TextStyle selectionStyle = getSelectionStyle(style);
@@ -828,7 +856,7 @@ public class TerminalPanel extends JComponent implements TerminalDisplay, Termin
         @Override
         public void consumeNul(int x, int y, int nulIndex, TextStyle style, CharBuffer characters, int startRow) {
           int row = y - startRow;
-          if (mySelection != null) {
+          if (mySelection != null && !(mySelectionScope != SelectionScope.ACTIVE && myTerminalTextBuffer.isUsingAlternateBuffer())) {
             // compute intersection with all NUL areas, non-breaking
             Pair<Integer, Integer> interval = mySelection.intersect(nulIndex, row + myClientScrollOrigin, columnCount - nulIndex);
             if (interval != null) {
@@ -950,7 +978,9 @@ public class TerminalPanel extends JComponent implements TerminalDisplay, Termin
   }
 
   private boolean inSelection(int x, int y) {
-    return mySelection != null && mySelection.contains(new Point(x, y));
+    return mySelection != null
+      && !(mySelectionScope != SelectionScope.ACTIVE && myTerminalTextBuffer.isUsingAlternateBuffer())
+      && mySelection.contains(new Point(x, y));
   }
 
   @Override
@@ -979,6 +1009,7 @@ public class TerminalPanel extends JComponent implements TerminalDisplay, Termin
 
   private void updateSelection(@Nullable TerminalSelection selection) {
     mySelection = selection;
+    mySelectionScope = SelectionScope.ACTIVE;
     for (TerminalSelectionChangesListener selectionListener : selectionChangesListeners) {
       selectionListener.selectionChanged(selection);
     }
@@ -1605,6 +1636,115 @@ public class TerminalPanel extends JComponent implements TerminalDisplay, Termin
 
   public TerminalTextBuffer getTerminalTextBuffer() {
     return myTerminalTextBuffer;
+  }
+
+  public void setPopupMenuActionProvider(@Nullable TerminalActionProvider provider) {
+    myPopupMenuActionProvider = provider;
+  }
+
+  public void setRetainedMainCopyHandler(@Nullable Runnable handler) {
+    myRetainedMainCopyHandler = handler;
+  }
+
+  public boolean hasSelection() {
+    return mySelection != null;
+  }
+
+  public boolean isRetainedMainSelection() {
+    return mySelection != null && mySelectionScope != SelectionScope.ACTIVE;
+  }
+
+  public boolean canCopyCurrentSelection() {
+    return mySelection != null
+      && !(mySelectionScope == SelectionScope.SEARCH_MAIN
+        && (myTerminalTextBuffer.isUsingAlternateBuffer()
+          || myCoordinateFindResult == null
+          || myCoordinateFindResult.getRevision() != myTerminalTextBuffer.getMainBufferRevision()));
+  }
+
+  public void selectVisible() {
+    int firstRow = Math.max(myClientScrollOrigin, -myTerminalTextBuffer.getHistoryLinesCount());
+    int lastRow = Math.min(myClientScrollOrigin + myTermSize.getRows() - 1,
+      myTerminalTextBuffer.getScreenLinesCount() - 1);
+    if (lastRow < firstRow) {
+      updateSelection(null);
+    }
+    else {
+      updateSelection(new TerminalSelection(new Point(0, firstRow),
+        new Point(Math.max(0, myTermSize.getColumns() - 1), lastRow)));
+    }
+    repaint();
+  }
+
+  public void selectAllMainOutput() {
+    MainBufferSelectionBounds bounds = myTerminalTextBuffer.getMainBufferSelectionBounds();
+    if (bounds == null) {
+      updateSelection(null);
+      repaint();
+      return;
+    }
+    updateSelection(new TerminalSelection(new Point(0, bounds.getStartRow()),
+      new Point(bounds.getEndColumn(), bounds.getEndRow())));
+    mySelectionScope = SelectionScope.ALL_MAIN;
+    repaint();
+  }
+
+  public void copyCurrentSelection() {
+    if (mySelectionScope == SelectionScope.ALL_MAIN && myRetainedMainCopyHandler != null) {
+      myRetainedMainCopyHandler.run();
+    }
+    else if (canCopyCurrentSelection()) {
+      handleCopy(false, false);
+    }
+  }
+
+  public void pasteClipboard() {
+    handlePaste();
+  }
+
+  public void setCoordinateFindResult(@Nullable TerminalSearchResult result) {
+    if (mySelectionScope == SelectionScope.SEARCH_MAIN) {
+      updateSelection(null);
+    }
+    myCoordinateFindResult = result;
+    myCoordinateFindIndex = -1;
+    repaint();
+  }
+
+  public @Nullable TerminalSearchResult getCoordinateFindResult() {
+    return myCoordinateFindResult;
+  }
+
+  public void selectNextCoordinateFindResult() {
+    selectCoordinateFindResult(true);
+  }
+
+  public void selectPreviousCoordinateFindResult() {
+    selectCoordinateFindResult(false);
+  }
+
+  private void selectCoordinateFindResult(boolean next) {
+    if (myCoordinateFindResult == null || myCoordinateFindResult.getMatches().isEmpty()
+        || myCoordinateFindResult.getRevision() != myTerminalTextBuffer.getMainBufferRevision()) {
+      return;
+    }
+    int count = myCoordinateFindResult.getMatches().size();
+    if (myCoordinateFindIndex < 0) {
+      myCoordinateFindIndex = next ? 0 : count - 1;
+    }
+    else {
+      myCoordinateFindIndex = Math.floorMod(myCoordinateFindIndex + (next ? 1 : -1), count);
+    }
+    TerminalSearchResult.Match match = myCoordinateFindResult.getMatches().get(myCoordinateFindIndex);
+    TerminalSearchResult.Span first = match.getSpans().get(0);
+    TerminalSearchResult.Span last = match.getSpans().get(match.getSpans().size() - 1);
+    updateSelection(new TerminalSelection(new Point(first.getStartCell(), first.getRow()),
+      new Point(last.getEndCell() - 1, last.getRow())));
+    mySelectionScope = SelectionScope.SEARCH_MAIN;
+    if (!myTerminalTextBuffer.isUsingAlternateBuffer()) {
+      myBoundedRangeModel.setValue(Math.min(0, first.getRow()));
+    }
+    repaint();
   }
 
   @Override
