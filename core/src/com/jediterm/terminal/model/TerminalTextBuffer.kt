@@ -155,7 +155,9 @@ class TerminalTextBuffer internal constructor(
   }
 
   private fun snapshot(line: TerminalLine): TerminalLineSnapshot = TerminalLineSnapshot(
-    line.copy(),
+    text = line.text,
+    isWrapped = line.isWrapped,
+    isNulOrEmpty = line.isNulOrEmpty,
   )
 
   private fun fireModelChangeEvent() {
@@ -556,13 +558,8 @@ data class MainBufferSnapshot(
   val screenLines: List<TerminalLineSnapshot>,
 )
 
-class TerminalLineSnapshot internal constructor(private val line: TerminalLine) {
-  val text: String
-    get() = line.text
-
-  val isWrapped: Boolean
-    get() = line.isWrapped
-
-  val isNulOrEmpty: Boolean
-    get() = line.isNulOrEmpty
-}
+data class TerminalLineSnapshot(
+  val text: String,
+  val isWrapped: Boolean,
+  val isNulOrEmpty: Boolean,
+)
