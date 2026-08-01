@@ -112,6 +112,7 @@ public class TerminalPanel extends JComponent implements TerminalDisplay, Termin
   private TerminalActionProvider myNextActionProvider;
   private TerminalActionProvider myPopupMenuActionProvider;
   private Runnable myRetainedMainCopyHandler;
+  private TerminalHighlightResult myCoordinateHighlightResult;
   private TerminalSearchResult myCoordinateFindResult;
   private int myCoordinateFindIndex = -1;
   private String myInputMethodUncommittedChars;
@@ -827,6 +828,20 @@ public class TerminalPanel extends JComponent implements TerminalDisplay, Termin
             }
           }
 
+          if (myCoordinateHighlightResult != null
+              && !myTerminalTextBuffer.isUsingAlternateBuffer()
+              && myCoordinateHighlightResult.getRevision() == myTerminalTextBuffer.getMainBufferRevision()) {
+            int terminalRow = row + myClientScrollOrigin;
+            for (TerminalHighlightResult.Span span : myCoordinateHighlightResult.getSpans(terminalRow)) {
+              int start = Math.max(x, span.getStartCell());
+              int end = Math.min(x + characters.length(), span.getEndCell());
+              if (start < end) {
+                drawCharacters(start, row, applyHighlightStyle(style, span),
+                  characters.subBuffer(start - x, end - start), gfx);
+              }
+            }
+          }
+
           if (myCoordinateFindResult != null
               && !myTerminalTextBuffer.isUsingAlternateBuffer()
               && myCoordinateFindResult.getRevision() == myTerminalTextBuffer.getMainBufferRevision()) {
@@ -944,6 +959,24 @@ public class TerminalPanel extends JComponent implements TerminalDisplay, Termin
     TextStyle foundPattern = getFoundPatternColor();
     builder.setBackground(foundPattern.getBackground());
     builder.setForeground(foundPattern.getForeground());
+    return builder.build();
+  }
+
+  private @NotNull TextStyle applyHighlightStyle(@NotNull TextStyle style, @NotNull TerminalHighlightResult.Span span) {
+    TextStyle highlight = span.getStyle();
+    TextStyle.Builder builder = span.isOverrideTerminalStyle() ? new TextStyle.Builder() : style.toBuilder();
+    if (highlight.getForeground() != null) {
+      builder.setForeground(highlight.getForeground());
+    }
+    if (highlight.getBackground() != null) {
+      builder.setBackground(highlight.getBackground());
+    }
+    builder.setOption(Option.BOLD,
+      !span.isOverrideTerminalStyle() && style.hasOption(Option.BOLD) || highlight.hasOption(Option.BOLD));
+    builder.setOption(Option.ITALIC,
+      !span.isOverrideTerminalStyle() && style.hasOption(Option.ITALIC) || highlight.hasOption(Option.ITALIC));
+    builder.setOption(Option.UNDERLINED,
+      !span.isOverrideTerminalStyle() && style.hasOption(Option.UNDERLINED) || highlight.hasOption(Option.UNDERLINED));
     return builder.build();
   }
 
@@ -1700,6 +1733,24 @@ public class TerminalPanel extends JComponent implements TerminalDisplay, Termin
 
   public void pasteClipboard() {
     handlePaste();
+  }
+
+  public int getVisibleStartRow() {
+    return Math.max(myClientScrollOrigin, -myTerminalTextBuffer.getHistoryLinesCount());
+  }
+
+  public int getVisibleEndRow() {
+    return Math.min(myClientScrollOrigin + myTermSize.getRows() - 1,
+      myTerminalTextBuffer.getScreenLinesCount() - 1);
+  }
+
+  public void setCoordinateHighlightResult(@Nullable TerminalHighlightResult result) {
+    myCoordinateHighlightResult = result;
+    repaint();
+  }
+
+  public @Nullable TerminalHighlightResult getCoordinateHighlightResult() {
+    return myCoordinateHighlightResult;
   }
 
   public void setCoordinateFindResult(@Nullable TerminalSearchResult result) {
