@@ -1,13 +1,25 @@
 package com.jediterm.terminal.model
 
-import com.jediterm.JediTerminal
-import com.jediterm.terminal.StyleState
 import com.jediterm.util.BackBufferDisplay
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class TerminalTextBufferMainBufferTest {
+  @Test
+  fun `tracks main wrap changes but not alternate transitions`() {
+    val buffer = TerminalTextBuffer(8, 2, StyleState())
+    val initialRevision = buffer.getMainBufferRevision()
+
+    buffer.setLineWrapped(0, true)
+    assertEquals(initialRevision + 1, buffer.getMainBufferRevision())
+
+    val wrappedRevision = buffer.getMainBufferRevision()
+    buffer.useAlternateBuffer(true)
+    buffer.useAlternateBuffer(false)
+    assertEquals(wrappedRevision, buffer.getMainBufferRevision())
+  }
+
   @Test
   fun `snapshot remains detached from later main buffer changes`() {
     val styleState = StyleState()
@@ -29,11 +41,17 @@ class TerminalTextBufferMainBufferTest {
     terminal.writeString("main")
 
     val expected = buffer.mainBufferText()
+    val bounds = requireNotNull(buffer.getMainBufferSelectionBounds())
+    val mainRevision = buffer.getMainBufferRevision()
     terminal.useAlternateBuffer(true)
     terminal.writeString("alternate")
 
     assertEquals(expected, buffer.mainBufferText())
     assertFalse(buffer.mainBufferText().contains("alternate"))
+    assertEquals(mainRevision, buffer.getMainBufferRevision())
+    assertEquals(0, bounds.startRow)
+    assertEquals(0, bounds.endRow)
+    assertEquals(3, bounds.endColumn)
   }
 
   private fun TerminalTextBuffer.mainBufferText(): String {
