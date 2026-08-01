@@ -75,6 +75,9 @@ class TerminalTextBuffer internal constructor(
   var isUsingAlternateBuffer: Boolean = false
     private set
 
+  @Volatile
+  private var mainBufferRevision: Long = 0
+
   private val listeners: MutableList<TerminalModelListener> = CopyOnWriteArrayList()
   private val historyBufferListeners: MutableList<TerminalHistoryBufferListener> = CopyOnWriteArrayList()
   private val changesMulticaster: TextBufferChangesMulticaster = TextBufferChangesMulticaster()
@@ -147,7 +150,34 @@ class TerminalTextBuffer internal constructor(
     try {
       val history = historyLinesStorageBackup ?: historyLinesStorage
       val screen = screenLinesStorageBackup ?: screenLinesStorage
-      return MainBufferSnapshot(history.map(::snapshot), screen.map(::snapshot))
+      return MainBufferSnapshot(mainBufferRevision, history.map(::snapshot), screen.map(::snapshot))
+    }
+    finally {
+      unlock()
+    }
+  }
+
+  fun getMainBufferRevision(): Long = mainBufferRevision
+
+  fun getMainBufferSelectionBounds(): MainBufferSelectionBounds? {
+    lock()
+    try {
+      val history = historyLinesStorageBackup ?: historyLinesStorage
+      val screen = screenLinesStorageBackup ?: screenLinesStorage
+      val lastScreenLine = (screen.size - 1 downTo 0).firstOrNull { !screen[it].isNulOrEmpty }
+      return when {
+        lastScreenLine != null -> MainBufferSelectionBounds(
+          startRow = if (history.size == 0) 0 else -history.size,
+          endRow = lastScreenLine,
+          endColumn = maxOf(0, screen[lastScreenLine].text.length - 1),
+        )
+        history.size > 0 -> MainBufferSelectionBounds(
+          startRow = -history.size,
+          endRow = -1,
+          endColumn = maxOf(0, history[history.size - 1].text.length - 1),
+        )
+        else -> null
+      }
     }
     finally {
       unlock()
@@ -160,7 +190,10 @@ class TerminalTextBuffer internal constructor(
     isNulOrEmpty = line.isNulOrEmpty,
   )
 
-  private fun fireModelChangeEvent() {
+  private fun fireModelChangeEvent(updateMainRevision: Boolean = !isUsingAlternateBuffer) {
+    if (updateMainRevision) {
+      mainBufferRevision++
+    }
     for (modelListener in listeners) {
       modelListener.modelChanged()
     }
@@ -271,7 +304,10 @@ class TerminalTextBuffer internal constructor(
    * Negative indexes are for history buffer. Non-negative for screen buffer.
    */
   fun setLineWrapped(index: Int, isWrapped: Boolean) {
-    getLine(index).isWrapped = isWrapped
+    val line = getLine(index)
+    if (line.isWrapped == isWrapped) return
+    line.isWrapped = isWrapped
+    fireModelChangeEvent()
     changesMulticaster.linesChanged(fromIndex = index)
   }
 
@@ -381,7 +417,7 @@ class TerminalTextBuffer internal constructor(
     }
 
     isUsingAlternateBuffer = enabled
-    fireModelChangeEvent()
+    fireModelChangeEvent(updateMainRevision = false)
   }
 
   fun insertLines(y: Int, count: Int, scrollRegionBottom: Int) {
@@ -554,6 +590,7 @@ class TerminalTextBuffer internal constructor(
 }
 
 data class MainBufferSnapshot(
+  val revision: Long,
   val historyLines: List<TerminalLineSnapshot>,
   val screenLines: List<TerminalLineSnapshot>,
 )
@@ -562,4 +599,10 @@ data class TerminalLineSnapshot(
   val text: String,
   val isWrapped: Boolean,
   val isNulOrEmpty: Boolean,
+)
+
+data class MainBufferSelectionBounds(
+  val startRow: Int,
+  val endRow: Int,
+  val endColumn: Int,
 )
