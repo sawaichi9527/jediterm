@@ -138,6 +138,28 @@ class TerminalTextBuffer internal constructor(
     historyBufferListeners.remove(listener)
   }
 
+  /**
+   * Returns detached line copies from the main buffer. When the alternate buffer is active, the snapshot is created
+   * from the retained main-buffer storages instead of the active alternate storages.
+   */
+  fun getMainBufferSnapshot(): MainBufferSnapshot {
+    lock()
+    try {
+      val history = historyLinesStorageBackup ?: historyLinesStorage
+      val screen = screenLinesStorageBackup ?: screenLinesStorage
+      return MainBufferSnapshot(history.map(::snapshot), screen.map(::snapshot))
+    }
+    finally {
+      unlock()
+    }
+  }
+
+  private fun snapshot(line: TerminalLine): TerminalLineSnapshot = TerminalLineSnapshot(
+    text = line.text,
+    isWrapped = line.isWrapped,
+    isNulOrEmpty = line.isNulOrEmpty,
+  )
+
   private fun fireModelChangeEvent() {
     for (modelListener in listeners) {
       modelListener.modelChanged()
@@ -530,3 +552,14 @@ class TerminalTextBuffer internal constructor(
     private val LOG: Logger = LoggerFactory.getLogger(TerminalTextBuffer::class.java)
   }
 }
+
+data class MainBufferSnapshot(
+  val historyLines: List<TerminalLineSnapshot>,
+  val screenLines: List<TerminalLineSnapshot>,
+)
+
+data class TerminalLineSnapshot(
+  val text: String,
+  val isWrapped: Boolean,
+  val isNulOrEmpty: Boolean,
+)
