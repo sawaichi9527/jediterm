@@ -50,6 +50,7 @@ public class JediTermWidget extends JPanel implements TerminalSession, TerminalW
   private final CompletableFuture<TerminalStarter> myTerminalStarterFuture = new CompletableFuture<>();
   protected final SettingsProvider mySettingsProvider;
   private TerminalActionProvider myNextActionProvider;
+  private Runnable myFindActionHandler;
   private final JLayeredPane myInnerPanel;
   private final TextProcessing myTextProcessing;
   private final List<TerminalWidgetListener> myListeners = new CopyOnWriteArrayList<>();
@@ -280,9 +281,18 @@ public class JediTermWidget extends JPanel implements TerminalSession, TerminalW
   public List<TerminalAction> getActions() {
     return List.of(new TerminalAction(mySettingsProvider.getFindActionPresentation(),
       keyEvent -> {
-        showFindText();
+        if (myFindActionHandler != null) {
+          myFindActionHandler.run();
+        }
+        else {
+          showFindText();
+        }
         return true;
       }).withMnemonicKey(KeyEvent.VK_F));
+  }
+
+  public void setFindActionHandler(@Nullable Runnable handler) {
+    myFindActionHandler = handler;
   }
 
   private void showFindText() {
