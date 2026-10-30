@@ -801,9 +801,7 @@ public class TerminalPanel extends JComponent implements TerminalDisplay, Termin
 
     setupAntialiasing(gfx);
 
-    gfx.setColor(getBackground());
-
-    gfx.fillRect(0, 0, getWidth(), getHeight());
+    paintTerminalBackground(gfx);
 
     try {
       myTerminalTextBuffer.lock();
@@ -1364,12 +1362,14 @@ public class TerminalPanel extends JComponent implements TerminalDisplay, Termin
     int height = Math.min(myCharSize.height - (includeSpaceBetweenLines ? 0 : mySpaceBetweenLines), getHeight() - yCoord);
     int width = Math.min(textLength * TerminalPanel.this.myCharSize.width, TerminalPanel.this.getWidth() - xCoord);
 
-    java.awt.Color backgroundColor = getEffectiveBackground(style);
-    gfx.setColor(backgroundColor);
-    gfx.fillRect(xCoord,
-            yCoord,
-            width,
-            height);
+    if (isDefaultBackgroundPainted() || style.getBackground() != null || style.hasOption(Option.INVERSE)) {
+      java.awt.Color backgroundColor = getEffectiveBackground(style);
+      gfx.setColor(backgroundColor);
+      gfx.fillRect(xCoord,
+              yCoord,
+              width,
+              height);
+    }
 
     if (buf.isNul()) {
       return; // nothing more to do
@@ -1542,7 +1542,30 @@ public class TerminalPanel extends JComponent implements TerminalDisplay, Termin
     return mySettingsProvider.getTerminalColorPalette();
   }
 
+  /**
+   * Paints the base layer behind every cell. The default fills the panel with the window background;
+   * an embedding application may override this to draw a background image instead.
+   */
+  protected void paintTerminalBackground(final @NotNull Graphics2D gfx) {
+    gfx.setColor(getBackground());
+    gfx.fillRect(0, 0, getWidth(), getHeight());
+  }
+
+  /**
+   * Whether cells whose style carries no explicit background are filled with the default
+   * background. Returning {@code false} lets an overridden {@link #paintTerminalBackground} show
+   * through the default-colored grid, which is what makes a terminal background image visible;
+   * cells with an explicit ANSI color, selection, search, highlight, or cursor stay opaque.
+   */
+  protected boolean isDefaultBackgroundPainted() {
+    return true;
+  }
+
   private void drawMargins(Graphics2D gfx, int width, int height) {
+    if (!isDefaultBackgroundPainted()) {
+      // The overridden background layer already covers the margin area.
+      return;
+    }
     gfx.setColor(getBackground());
     gfx.fillRect(0, height, getWidth(), getHeight() - height);
     gfx.fillRect(width, 0, getWidth() - width, getHeight());
