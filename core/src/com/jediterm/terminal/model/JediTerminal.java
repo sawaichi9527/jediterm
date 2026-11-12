@@ -770,6 +770,15 @@ public class JediTerminal implements Terminal, TerminalMouseListener, TerminalCo
     return myScrollRegionTop;
   }
 
+  /**
+   * eyeShell patch: the bottom margin is needed to tell a full-height region (normal) from one left
+   * behind by a program that exited mid-screen. Without it, a shortened region draws every new line
+   * on its bottom row and the tab looks frozen.
+   */
+  public int getScrollRegionBottom() {
+    return myScrollRegionBottom;
+  }
+
   @Override
   public void characterAttributes(final TextStyle textStyle) {
     myStyleState.setCurrent(textStyle);
