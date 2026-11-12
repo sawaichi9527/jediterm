@@ -736,11 +736,18 @@ public class JediTerminal implements Terminal, TerminalMouseListener, TerminalCo
 
   @Override
   public void setScrollingRegion(int top, int bottom) {
-    if (top > bottom) {
-      LOG.error("Top margin of scroll region can't be greater then bottom: " + top + ">" + bottom);
+    // DECSTBM requires the top margin to be strictly above the bottom margin and the region to be
+    // at least two lines. xterm, Ghostty, and Windows Terminal ignore such a sequence; JediTerm used
+    // to apply it anyway, and a one-line region confines every later line to that row, which makes a
+    // healthy terminal look frozen (the "typed text overwrites the last line" report).
+    // eyeShell patch.
+    int clampedTop = Math.max(1, top);
+    int clampedBottom = Math.min(myTerminalHeight, bottom);
+    if (clampedTop >= clampedBottom) {
+      return;
     }
-    myScrollRegionTop = Math.max(1, top);
-    myScrollRegionBottom = Math.min(myTerminalHeight, bottom);
+    myScrollRegionTop = clampedTop;
+    myScrollRegionBottom = clampedBottom;
 
     //DECSTBM moves the cursor to column 1, line 1 of the page
     cursorPosition(1, 1);
@@ -763,7 +770,11 @@ public class JediTerminal implements Terminal, TerminalMouseListener, TerminalCo
 
   @Override
   public void resetScrollRegions() {
-    setScrollingRegion(1, myTerminalHeight);
+    // Assign directly instead of going through setScrollingRegion: on a one-line screen the region
+    // is trivially full height and the DECSTBM validity check would ignore the reset.
+    myScrollRegionTop = 1;
+    myScrollRegionBottom = myTerminalHeight;
+    cursorPosition(1, 1);
   }
 
   public int getScrollRegionTop() {
