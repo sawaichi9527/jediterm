@@ -57,6 +57,16 @@ public class JediTerminal implements Terminal, TerminalMouseListener, TerminalCo
 
   private final EnumSet<TerminalMode> myModes = EnumSet.noneOf(TerminalMode.class);
 
+  /**
+   * eyeShell patch: notified when a line feed had to repair scroll margins that a program left
+   * behind, so an embedding view can log the event and keep the diagnosis reproducible.
+   */
+  public interface StaleScrollRegionListener {
+    void scrollRegionRepaired(int cursorY, int regionTop, int regionBottom, int terminalHeight);
+  }
+
+  private @Nullable volatile StaleScrollRegionListener myStaleScrollRegionListener;
+
   private final TerminalKeyEncoder myTerminalKeyEncoder;
 
   private final Stack<String> myWindowTitlesStack = new Stack<>();
@@ -615,6 +625,10 @@ public class JediTerminal implements Terminal, TerminalMouseListener, TerminalCo
     try {
       if (myCursorY == myScrollRegionBottom) {
         scrollArea(myScrollRegionTop, scrollingRegionSize(), -1);
+      } else if (repairStaleScrollRegion()) {
+        // eyeShell patch: margins left behind by a program were restored, so the whole screen scrolls
+        // exactly as a line feed at the bottom of a healthy terminal does.
+        scrollArea(myScrollRegionTop, scrollingRegionSize(), -1);
       } else {
         myCursorY += 1;
         adjustXY(-1);
@@ -636,6 +650,9 @@ public class JediTerminal implements Terminal, TerminalMouseListener, TerminalCo
     try {
       myCursorX = 0;
       if (myCursorY == myScrollRegionBottom) {
+        scrollArea(myScrollRegionTop, scrollingRegionSize(), -1);
+      } else if (repairStaleScrollRegion()) {
+        // eyeShell patch: same repair as index(), for NEL (ESC E).
         scrollArea(myScrollRegionTop, scrollingRegionSize(), -1);
       } else {
         myCursorY += 1;
@@ -732,6 +749,46 @@ public class JediTerminal implements Terminal, TerminalMouseListener, TerminalCo
 
       myDisplay.setCursor(myCursorX, myCursorY);
     });
+  }
+
+  /** Registers the listener, or clears it with {@code null}. eyeShell patch. */
+  public void setStaleScrollRegionListener(@Nullable StaleScrollRegionListener listener) {
+    myStaleScrollRegionListener = listener;
+  }
+
+  /**
+   * eyeShell patch: repairs scroll margins that a program left behind.
+   *
+   * A program that owns a scroll region (for example a status line on the last row) can exit without
+   * restoring the margins. The shell then writes on the real last row, which is *below* the bottom
+   * margin, so no line feed can scroll: the cursor cannot move down, every new line overwrites the
+   * last one, and the tab looks frozen although the session is healthy (the "Enter no longer adds a
+   * line" report). xterm behaves the same way, so the state — not the emulation — is what gets
+   * repaired: the margins are restored to the full height and the caller then scrolls the whole
+   * screen.
+   *
+   * Only a line feed at the last row of the main screen can reach this state; a program that is
+   * still using its region keeps the cursor inside it, so this never fires mid-program.
+   */
+  private boolean repairStaleScrollRegion() {
+    if (myTerminalTextBuffer.isUsingAlternateBuffer()) {
+      return false;
+    }
+    if (myScrollRegionTop <= 1 && myScrollRegionBottom >= myTerminalHeight) {
+      return false;
+    }
+    if (myCursorY <= myScrollRegionBottom || myCursorY < myTerminalHeight) {
+      return false;
+    }
+    int previousTop = myScrollRegionTop;
+    int previousBottom = myScrollRegionBottom;
+    myScrollRegionTop = 1;
+    myScrollRegionBottom = myTerminalHeight;
+    StaleScrollRegionListener listener = myStaleScrollRegionListener;
+    if (listener != null) {
+      listener.scrollRegionRepaired(myCursorY, previousTop, previousBottom, myTerminalHeight);
+    }
+    return true;
   }
 
   @Override
